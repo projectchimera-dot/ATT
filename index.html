@@ -17,6 +17,7 @@
   --brass: #C89B4A;
   --brass-dim: #8A6B34;
   --rust: #B5624A;
+  --good: #6FA287;
   --font-display: 'Fraunces', serif;
   --font-body: 'Karla', sans-serif;
 }
@@ -184,6 +185,9 @@ input[type=range]{ flex:1; }
 }
 .file-btn.small{ flex:1; }
 .library-actions{ margin-bottom:10px; }
+.slot-volume{ display:flex; align-items:center; gap:8px; }
+.slot-volume-label{ font-size:11px; color:var(--muted); width:24px; flex-shrink:0; }
+.slot-volume-value{ font-size:11px; color:var(--muted); width:32px; text-align:right; font-variant-numeric:tabular-nums; flex-shrink:0; }
 
 .custom-add-row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px; }
 .custom-add-row input[type=text]{
@@ -208,6 +212,32 @@ input[type=range]{ flex:1; }
 .progress-row > span:last-child{ width:82px; text-align:right; font-variant-numeric:tabular-nums; }
 .progress-bar{ flex:1; height:5px; background:var(--line); border-radius:999px; overflow:hidden; }
 .progress-fill{ height:100%; background:var(--brass); width:0%; transition:width .2s linear; }
+
+/* In-session mixer */
+.mixer-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); }
+.mixer-row:last-child{ border-bottom:none; }
+.mixer-row-label{ display:flex; flex-direction:column; gap:1px; flex:1 1 88px; min-width:0; }
+.mixer-row-label strong{ font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mixer-row-label span{ font-size:11px; color:var(--muted); }
+.mixer-row input[type=range]{ flex:1.6; }
+.mixer-row-value{ font-size:11px; color:var(--muted); width:32px; text-align:right; font-variant-numeric:tabular-nums; flex-shrink:0; }
+
+/* Focus challenge */
+.challenge-stats{ display:flex; gap:22px; margin-bottom:14px; }
+.challenge-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:8px; }
+.challenge-btn{
+  background:var(--panel); border:1px solid var(--line); color:var(--parchment);
+  padding:11px 8px; border-radius:3px; cursor:pointer; display:flex; flex-direction:column;
+  align-items:center; gap:3px; transition:border-color .15s ease, color .15s ease;
+}
+.challenge-btn-num{ font-family:var(--font-display); font-size:17px; font-weight:600; }
+.challenge-btn-label{ font-size:10.5px; color:var(--muted); }
+.challenge-btn.challenge-correct{ border-color:var(--good); color:var(--good); }
+.challenge-btn.challenge-correct .challenge-btn-label{ color:var(--good); }
+.challenge-btn.challenge-wrong{ border-color:var(--rust); color:var(--rust); }
+.challenge-btn.challenge-wrong .challenge-btn-label{ color:var(--rust); }
+.challenge-btn.challenge-reveal{ border-color:var(--brass); color:var(--brass); }
+.challenge-btn.challenge-reveal .challenge-btn-label{ color:var(--brass-dim); }
 
 .center-card{ text-align:center; padding:60px 10px 20px; }
 .summary-total{ font-family:var(--font-display); font-size:28px; color:var(--brass); margin:8px 0 16px; font-weight:600; }
@@ -318,9 +348,18 @@ input[type=range]{ flex:1; }
           <span>Play the divided attention explanation</span>
         </div>
         <div class="field-row">
-          <label for="volume-slider">Volume</label>
+          <label for="volume-slider">Master volume</label>
           <input type="range" id="volume-slider" min="0" max="100" value="100" />
         </div>
+      </div>
+
+      <div class="panel">
+        <h2>Focus Challenge</h2>
+        <div class="field-row">
+          <label class="switch"><input type="checkbox" id="challenge-toggle" /><span></span></label>
+          <span>Randomly mute one sound for a few seconds during the session</span>
+        </div>
+        <p class="hint">When it goes quiet, press the number for the sound that stopped as soon as you notice &mdash; there's nothing on screen to give it away.</p>
       </div>
     </section>
 
@@ -375,6 +414,24 @@ input[type=range]{ flex:1; }
           <span id="session-time-label">0:00 / 0:00</span>
         </div>
       </div>
+
+      <div class="panel" id="session-mixer-panel">
+        <div class="panel-header">
+          <h2>Mixer</h2>
+          <button type="button" id="mixer-toggle-btn" class="btn-text">Show</button>
+        </div>
+        <div id="session-mixer-list" style="display:none;"></div>
+      </div>
+
+      <div class="panel" id="session-challenge-panel" style="display:none;">
+        <h2>Focus Challenge</h2>
+        <div class="challenge-stats">
+          <div class="stat"><strong id="challenge-correct">0</strong><span>correct</span></div>
+          <div class="stat"><strong id="challenge-missed">0</strong><span>missed</span></div>
+          <div class="stat"><strong id="challenge-wrong">0</strong><span>wrong</span></div>
+        </div>
+        <div class="challenge-grid" id="challenge-buttons"></div>
+      </div>
     </section>
 
     <section id="view-summary" class="view">
@@ -428,6 +485,12 @@ var DIVIDED_PROMPT_TEXT = "In divided attention mode you can now listen to every
 var MODE_LABELS = {selective:'Selective Attention', rapid:'Rapid Attention Switching', divided:'Divided Attention'};
 var MODE_ORDER = ['selective','rapid','divided'];
 
+var CHALLENGE_MIN_GAP_MS = 6000;      // quiet time between challenge rounds
+var CHALLENGE_MAX_GAP_MS = 14000;
+var CHALLENGE_MIN_SILENCE_MS = 2500;  // how long a sound drops out for
+var CHALLENGE_MAX_SILENCE_MS = 4000;
+var CHALLENGE_REVEAL_MS = 900;        // how long the correct/incorrect flash lasts
+
 // ---------- State ----------
 var library = {};           // id -> {id, word, desc, isCustom, audioBuffer, mimeType}
 var assignment = {};        // positionId -> soundId
@@ -440,13 +503,24 @@ var modesConfig = {
 var ttsVoiceURI = null;
 var playDividedPrompt = true;
 var masterVolume = 1;
+var soundVolumes = {};      // soundId -> 0..1, persisted, applies whether or not the sound is currently playing
+var challengeEnabled = false;
 
 var audioCtx = null;
 var masterGain = null;
-var activeNodes = {};       // positionId -> {source, panner, gain}
+var activeNodes = {};       // positionId -> {handle, panner, gain, soundId}
+var silencedPositions = {}; // positionId -> true while the focus challenge has that position muted
+var activePreviewGains = {}; // soundId -> GainNode, while previewSound() is playing that sound
 var voicesList = [];
 var session = null;
 var pendingCustomFile = null;
+
+var challengeState = {
+  timerId: null,        // pending "start next round" timeout
+  roundTimeoutId: null,  // pending "auto-resolve this round" timeout
+  round: null,           // {posId, soundId, answered}
+  stats: {correct:0, missed:0, wrong:0}
+};
 
 var clockState = {running:false, paused:false, lastTick:0, phaseElapsed:0, focusElapsed:0, nextFocusDelay:0};
 
@@ -573,6 +647,18 @@ async function appendHistory(record){
   await safeStorageSet('session-history', JSON.stringify(list));
 }
 
+// Per-sound volumes live in their own key (rather than app-config) and are
+// keyed by sound id, so a level set on a default sound or a not-yet-loaded
+// one is remembered whether or not that sound is currently playing.
+async function restoreSoundVolumes(){
+  var raw = await safeStorageGet('sound-volumes');
+  if (!raw) return;
+  try{ soundVolumes = JSON.parse(raw) || {}; }catch(e){ soundVolumes = {}; }
+}
+async function saveSoundVolumes(){
+  await safeStorageSet('sound-volumes', JSON.stringify(soundVolumes));
+}
+
 async function restoreConfig(){
   var raw = await safeStorageGet('app-config');
   if (!raw) return;
@@ -584,12 +670,14 @@ async function restoreConfig(){
     if (typeof cfg.playDividedPrompt === 'boolean') playDividedPrompt = cfg.playDividedPrompt;
     if (cfg.assignment) assignment = cfg.assignment;
     if (typeof cfg.masterVolume === 'number') masterVolume = cfg.masterVolume;
+    if (typeof cfg.challengeEnabled === 'boolean') challengeEnabled = cfg.challengeEnabled;
   }catch(e){}
 }
 async function saveConfig(){
   await safeStorageSet('app-config', JSON.stringify({
     difficulty: difficulty, modesConfig: modesConfig, ttsVoiceURI: ttsVoiceURI,
-    playDividedPrompt: playDividedPrompt, assignment: assignment, masterVolume: masterVolume
+    playDividedPrompt: playDividedPrompt, assignment: assignment, masterVolume: masterVolume,
+    challengeEnabled: challengeEnabled
   }));
 }
 
@@ -670,6 +758,63 @@ function makeSourceHandle(entry, ctx){
   return null;
 }
 
+// ---------- Per-sound volume ----------
+function getSoundVolume(id){
+  var v = soundVolumes[id];
+  return (typeof v === 'number' && isFinite(v)) ? clamp(v,0,1) : 1;
+}
+// Applies a new level for one sound: updates the stored value, nudges any
+// position currently playing that sound and any active preview, and syncs
+// every rendered slider for it (library card + in-session mixer). Pass
+// persist=false while the user is still dragging, and save once on release.
+function setSoundVolume(id, vol, persist){
+  vol = clamp(vol, 0, 1);
+  soundVolumes[id] = vol;
+  Object.keys(activeNodes).forEach(function(posId){
+    if (activeNodes[posId].soundId === id) applyPositionGain(posId, 60);
+  });
+  if (activePreviewGains[id]){
+    try{ activePreviewGains[id].gain.value = vol; }catch(e){}
+  }
+  syncVolumeUI(id, vol);
+  if (persist) saveSoundVolumes();
+}
+function syncVolumeUI(id, vol){
+  var pct = Math.round(vol*100);
+  $all('.volume-range[data-sound-id="'+id+'"]').forEach(function(input){
+    input.value = pct;
+    var out = input.parentNode.querySelector('.slot-volume-value, .mixer-row-value');
+    if (out) out.textContent = pct+'%';
+  });
+}
+function wireVolumeInput(input, id){
+  input.addEventListener('input', function(){
+    setSoundVolume(id, parseInt(input.value,10)/100, false);
+  });
+  input.addEventListener('change', function(){ saveSoundVolumes(); });
+}
+
+// A position's audible gain is its sound's set volume, unless the focus
+// challenge currently has that position silenced.
+function targetGainForPosition(posId){
+  var node = activeNodes[posId];
+  if (!node) return 0;
+  if (silencedPositions[posId]) return 0;
+  return getSoundVolume(node.soundId);
+}
+function applyPositionGain(posId, rampMs){
+  var node = activeNodes[posId];
+  if (!node || !audioCtx) return;
+  var target = targetGainForPosition(posId);
+  var now = audioCtx.currentTime;
+  var dur = Math.max((typeof rampMs==='number' ? rampMs : 150)/1000, 0.01);
+  try{
+    node.gain.gain.cancelScheduledValues(now);
+    node.gain.gain.setValueAtTime(node.gain.gain.value, now);
+    node.gain.gain.linearRampToValueAtTime(target, now+dur);
+  }catch(e){}
+}
+
 function startAllPositionAudio(){
   var ctx = ensureRunning();
   stopAllPositionAudio();
@@ -687,16 +832,17 @@ function startAllPositionAudio(){
     else if (panner.setPosition) panner.setPosition(xyz.x,xyz.y,xyz.z);
     var gain = ctx.createGain();
     gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(1, ctx.currentTime+0.6);
+    gain.gain.linearRampToValueAtTime(getSoundVolume(soundId), ctx.currentTime+0.6);
     handle.outputNode.connect(panner).connect(gain).connect(masterGain);
     handle.start();
-    activeNodes[posId] = {handle:handle, panner:panner, gain:gain};
+    activeNodes[posId] = {handle:handle, panner:panner, gain:gain, soundId:soundId};
   });
 }
 function stopAllPositionAudio(){
   var ctx = audioCtx;
   var nodes = activeNodes;
   activeNodes = {};
+  silencedPositions = {};
   Object.keys(nodes).forEach(function(posId){
     var n = nodes[posId];
     try{
@@ -910,6 +1056,14 @@ function buildSoundSlot(id, word, desc, isCustom){
     }
   }
   wrap.appendChild(actions);
+  var volRow = document.createElement('div');
+  volRow.className = 'slot-volume';
+  var pct = Math.round(getSoundVolume(id)*100);
+  volRow.innerHTML = '<span class="slot-volume-label">Vol</span>'
+    +'<input type="range" min="0" max="100" value="'+pct+'" class="volume-range" data-sound-id="'+id+'" />'
+    +'<span class="slot-volume-value">'+pct+'%</span>';
+  wrap.appendChild(volRow);
+  wireVolumeInput(volRow.querySelector('input'), id);
   return wrap;
 }
 function previewSound(id){
@@ -918,13 +1072,15 @@ function previewSound(id){
   var ctx = ensureRunning();
   var handle = makeSourceHandle(entry, ctx);
   if (!handle) return;
-  var g = ctx.createGain(); g.gain.value = 1;
+  var g = ctx.createGain(); g.gain.value = getSoundVolume(id);
+  activePreviewGains[id] = g;
   handle.outputNode.connect(g).connect(masterGain);
   handle.start();
   setTimeout(function(){
     handle.stop();
     try{ handle.outputNode.disconnect(g); }catch(e){}
     try{ g.disconnect(); }catch(e){}
+    if (activePreviewGains[id]===g) delete activePreviewGains[id];
   }, 3000);
 }
 async function handleSoundUpload(id, word, desc, file, isCustom){
@@ -1086,11 +1242,19 @@ function startSession(){
   startAllPositionAudio();
   switchView('session');
   renderSessionCompass();
+  renderSessionMixer();
+  $('#session-mixer-list').style.display = 'none';
+  $('#mixer-toggle-btn').textContent = 'Show';
+  challengeState.stats = {correct:0, missed:0, wrong:0};
+  updateChallengeScoreUI();
+  $('#session-challenge-panel').style.display = challengeEnabled ? '' : 'none';
+  if (challengeEnabled) renderChallengeButtons();
   clockState.running = true; clockState.paused = false;
   clockState.lastTick = performance.now();
   clockState.phaseElapsed = 0;
   $('#pause-btn').textContent = 'Pause';
   enterPhase(session.phases[0]);
+  scheduleNextChallengeRound();
 }
 function setCompassCenterPulsing(on){
   var el = $('#session-compass .compass-center');
@@ -1195,18 +1359,140 @@ function updateSessionCompassHighlight(){
   });
 }
 
+function renderSessionMixer(){
+  var wrap = $('#session-mixer-list');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  POSITION_SETS[difficulty].forEach(function(posId){
+    var soundId = assignment[posId];
+    if (!soundId) return;
+    var word = library[soundId] ? library[soundId].word : soundId;
+    var pct = Math.round(getSoundVolume(soundId)*100);
+    var row = document.createElement('div');
+    row.className = 'mixer-row';
+    row.innerHTML = '<div class="mixer-row-label"><strong>'+escapeHtml(word)+'</strong><span>'+escapeHtml(POSITION_META[posId].label)+'</span></div>'
+      +'<input type="range" min="0" max="100" value="'+pct+'" class="volume-range" data-sound-id="'+soundId+'" />'
+      +'<span class="mixer-row-value">'+pct+'%</span>';
+    wrap.appendChild(row);
+    wireVolumeInput(row.querySelector('input'), soundId);
+  });
+}
+
+// ---------- Focus Challenge (silence-and-guess) ----------
+// A separate, opt-in layer on top of a running session: at random intervals
+// it mutes one currently-playing position for a few seconds. Nothing on
+// screen marks which one or even that a round is underway \u2014 the only
+// signal is the audio itself. The person presses the matching numbered
+// button (or keys 1\u20138) for the position they think went quiet.
+function eligibleChallengePositions(){
+  // Skip any position already at (or near) zero volume \u2014 silencing it would be imperceptible.
+  return Object.keys(activeNodes).filter(function(posId){
+    return getSoundVolume(activeNodes[posId].soundId) > 0.05;
+  });
+}
+function renderChallengeButtons(){
+  var wrap = $('#challenge-buttons');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  POSITION_SETS[difficulty].forEach(function(posId, i){
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'challenge-btn';
+    btn.dataset.position = posId;
+    btn.innerHTML = '<span class="challenge-btn-num">'+(i+1)+'</span><span class="challenge-btn-label">'+escapeHtml(POSITION_META[posId].label)+'</span>';
+    btn.addEventListener('click', function(){ resolveChallengeRound(posId); });
+    wrap.appendChild(btn);
+  });
+}
+function scheduleNextChallengeRound(){
+  if (challengeState.timerId){ clearTimeout(challengeState.timerId); challengeState.timerId = null; }
+  if (!challengeEnabled || !session || !clockState.running || clockState.paused) return;
+  var delay = randRange(CHALLENGE_MIN_GAP_MS, CHALLENGE_MAX_GAP_MS);
+  challengeState.timerId = setTimeout(startChallengeRound, delay);
+}
+function startChallengeRound(){
+  challengeState.timerId = null;
+  if (!challengeEnabled || !session || !clockState.running || clockState.paused) return;
+  var candidates = eligibleChallengePositions();
+  if (candidates.length < 2){ scheduleNextChallengeRound(); return; } // not enough audible sounds to make a fair round
+  var posId = candidates[Math.floor(Math.random()*candidates.length)];
+  var silenceMs = randRange(CHALLENGE_MIN_SILENCE_MS, CHALLENGE_MAX_SILENCE_MS);
+  silencedPositions[posId] = true;
+  applyPositionGain(posId, 120);
+  challengeState.round = {posId:posId, soundId:activeNodes[posId].soundId, answered:false};
+  challengeState.roundTimeoutId = setTimeout(function(){ resolveChallengeRound(null); }, silenceMs);
+}
+function resolveChallengeRound(guessedPosId){
+  var round = challengeState.round;
+  if (!round || round.answered) return; // no round in progress, or already settled \u2014 quietly ignore
+  round.answered = true;
+  if (challengeState.roundTimeoutId){ clearTimeout(challengeState.roundTimeoutId); challengeState.roundTimeoutId = null; }
+  silencedPositions[round.posId] = false;
+  applyPositionGain(round.posId, 150);
+  var outcome = guessedPosId===null ? 'missed' : (guessedPosId===round.posId ? 'correct' : 'wrong');
+  challengeState.stats[outcome]++;
+  flashChallengeOutcome(round.posId, guessedPosId, outcome);
+  updateChallengeScoreUI();
+  challengeState.round = null;
+  scheduleNextChallengeRound();
+}
+function cancelChallengeRound(){
+  if (challengeState.roundTimeoutId){ clearTimeout(challengeState.roundTimeoutId); challengeState.roundTimeoutId = null; }
+  if (challengeState.round && !challengeState.round.answered){
+    silencedPositions[challengeState.round.posId] = false;
+    applyPositionGain(challengeState.round.posId, 0);
+  }
+  challengeState.round = null;
+}
+function stopChallengeScheduling(){
+  if (challengeState.timerId){ clearTimeout(challengeState.timerId); challengeState.timerId = null; }
+  cancelChallengeRound();
+}
+function flashClass(el, cls){
+  el.classList.add(cls);
+  setTimeout(function(){ el.classList.remove(cls); }, CHALLENGE_REVEAL_MS);
+}
+function flashChallengeOutcome(correctPosId, guessedPosId, outcome){
+  var correctBtn = $('.challenge-btn[data-position="'+correctPosId+'"]');
+  var guessedBtn = guessedPosId ? $('.challenge-btn[data-position="'+guessedPosId+'"]') : null;
+  if (outcome==='correct'){
+    if (guessedBtn) flashClass(guessedBtn, 'challenge-correct');
+  } else {
+    if (guessedBtn) flashClass(guessedBtn, 'challenge-wrong');
+    if (correctBtn) flashClass(correctBtn, 'challenge-reveal'); // reveal the right answer once the round is over
+  }
+}
+function updateChallengeScoreUI(){
+  var s = challengeState.stats;
+  if ($('#challenge-correct')) $('#challenge-correct').textContent = s.correct;
+  if ($('#challenge-missed')) $('#challenge-missed').textContent = s.missed;
+  if ($('#challenge-wrong')) $('#challenge-wrong').textContent = s.wrong;
+}
+function handleChallengeKeydown(e){
+  if (!challengeEnabled || !session) return;
+  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  var n = parseInt(e.key, 10);
+  if (!n || n<1 || n>8) return;
+  var posId = POSITION_SETS[difficulty][n-1];
+  if (!posId || !activeNodes[posId]) return;
+  e.preventDefault();
+  resolveChallengeRound(posId);
+}
+
 function togglePause(){
   if (!session) return;
   if (!clockState.paused){
     clockState.paused = true;
     if (audioCtx) audioCtx.suspend();
     if (window.speechSynthesis) speechSynthesis.pause();
+    stopChallengeScheduling();
     $('#pause-btn').textContent = 'Resume';
   } else {
     clockState.paused = false;
     clockState.lastTick = performance.now();
     if (audioCtx) audioCtx.resume();
     if (window.speechSynthesis) speechSynthesis.resume();
+    scheduleNextChallengeRound();
     $('#pause-btn').textContent = 'Pause';
   }
 }
@@ -1223,6 +1509,7 @@ async function endSession(){
   var snap = session;
   session = null;
   clockState.running = false;
+  stopChallengeScheduling();
   stopAllPositionAudio();
   if (window.speechSynthesis) speechSynthesis.cancel();
   var totalMs = snap.elapsedByMode.selective + snap.elapsedByMode.rapid + snap.elapsedByMode.divided;
@@ -1236,7 +1523,8 @@ async function endSession(){
       rapid: Math.round(snap.elapsedByMode.rapid/6000)/10,
       divided: Math.round(snap.elapsedByMode.divided/6000)/10
     },
-    totalMinutes: Math.round(totalMs/6000)/10
+    totalMinutes: Math.round(totalMs/6000)/10,
+    challenge: challengeEnabled ? {correct:challengeState.stats.correct, missed:challengeState.stats.missed, wrong:challengeState.stats.wrong} : null
   };
   await appendHistory(record);
   showSummary(record);
@@ -1246,6 +1534,10 @@ function showSummary(record){
   if (record.minutesByMode.selective>0) parts.push('<li>Selective Attention: '+record.minutesByMode.selective+' min</li>');
   if (record.minutesByMode.rapid>0) parts.push('<li>Rapid Switching: '+record.minutesByMode.rapid+' min</li>');
   if (record.minutesByMode.divided>0) parts.push('<li>Divided Attention: '+record.minutesByMode.divided+' min</li>');
+  if (record.challenge){
+    var challengeTotal = record.challenge.correct + record.challenge.missed + record.challenge.wrong;
+    if (challengeTotal>0) parts.push('<li>Focus Challenge: '+record.challenge.correct+' of '+challengeTotal+' correct</li>');
+  }
   $('#summary-breakdown').innerHTML = '<p class="summary-total">'+record.totalMinutes+' minutes trained</p><ul class="summary-list">'+parts.join('')+'</ul>';
   switchView('summary');
 }
@@ -1346,11 +1638,20 @@ function wireStaticEvents(){
   });
   $('#custom-name-input').addEventListener('input', updateCustomAddBtn);
   $('#custom-add-btn').addEventListener('click', onCustomAddClicked);
+  $('#challenge-toggle').addEventListener('change', function(e){ challengeEnabled = e.target.checked; saveConfig(); });
+  $('#mixer-toggle-btn').addEventListener('click', function(){
+    var list = $('#session-mixer-list');
+    var willShow = list.style.display === 'none';
+    list.style.display = willShow ? '' : 'none';
+    $('#mixer-toggle-btn').textContent = willShow ? 'Hide' : 'Show';
+  });
+  document.addEventListener('keydown', handleChallengeKeydown);
 }
 
 // ---------- Init ----------
 async function init(){
   await restoreConfig();
+  await restoreSoundVolumes();
   await loadDefaultSoundsFromFolder();
   await restoreLibrary();
   renderLibrary();
@@ -1360,6 +1661,7 @@ async function init(){
   renderCompass();
   wireStaticEvents();
   $('#divided-prompt-toggle').checked = playDividedPrompt;
+  $('#challenge-toggle').checked = challengeEnabled;
   $('#volume-slider').value = Math.round(masterVolume*100);
   if (window.speechSynthesis){
     loadVoices();
